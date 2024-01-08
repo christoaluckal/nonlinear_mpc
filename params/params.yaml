@@ -1,0 +1,15 @@
+global_speed: 0.5
+N: 5
+future_time: 0.5
+WB: 0.324
+vel_max: 3
+vel_min: 0.1
+max_steer: 0.4189
+max_acc: 3
+track_file: "tracks/IMS_centerline.csv"
+Q: [5,5,0.1,0.1]
+R: [0.1,0.1]
+U: [0.1,0.1]
+drive_topic: "/car_1/command"
+odom_topic: "/car_1/base/odom"
+rate: 50

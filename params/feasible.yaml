@@ -1,0 +1,16 @@
+global_speed: 1
+N: 5
+future_time: 2
+WB: 0.324
+vel_max: 15
+vel_min: 0.1
+max_steer: 0.4189
+max_acc: 3
+track_file: "tracks/amongus_raceline.csv"
+Q: [0.1,0.1,0.1,0.1]
+R: [0.1,0.1]
+U: [0.1,0.1]
+drive_topic: "/car_1/command"
+odom_topic: "/car_1/base/odom"
+rate: 50
+v_max: 1.5

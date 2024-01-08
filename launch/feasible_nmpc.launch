@@ -1,0 +1,4 @@
+<launch>
+<rosparam command="load" file="$(find nonlinear_mpc)/params/feasible.yaml"/>
+<node name="feasible_nmpc_node" pkg="nonlinear_mpc" type="feasible_nmpc.py" output="screen" />
+</launch>

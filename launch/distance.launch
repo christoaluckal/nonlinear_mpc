@@ -1,0 +1,4 @@
+<launch>
+<rosparam command="load" file="$(find nonlinear_mpc)/params/ds.yaml"/>
+<node name="nmpc_node" pkg="nonlinear_mpc" type="nmpc_ds.py" output="screen" />
+</launch>
