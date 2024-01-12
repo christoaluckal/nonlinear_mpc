@@ -66,15 +66,23 @@ global_path,x_spline,y_spline = pathgen.get_spline_path(csv_f,time)
 
 def sawtooth_wave(a,b,t,count):
     t = np.linspace(0, t,count)
+    chunk_size = 30
 
-    y = (b+a)/2 + ((b-a)/2) * signal.sawtooth(np.pi * 4 * t)
-    return y
+    sawtooth_wave = signal.sawtooth(2 * np.pi * (1/chunk_size) * t, 0.5)
+    sawtooth_wave = (b - a) * (sawtooth_wave + 1) / 2 + a
+    return sawtooth_wave
 
-v_profile = sawtooth_wave(1,2,track_length,len(global_path))
+
+
+v_profile = sawtooth_wave(5,5,track_length,len(global_path))
+
 v_profile = np.array(v_profile)
 v_spline = CubicSpline(np.linspace(0,track_length,len(global_path)),v_profile)
 
 s_vec = np.linspace(0,track_length,len(global_path))
+
+plt.plot(s_vec,v_profile)
+plt.show()
 
 class VehicleState:
     def __init__(self):
@@ -116,16 +124,16 @@ def euclidean_dist(p1,p2):
 
 def distance_to_spline(t,current_x,current_y):
     spline_x, spline_y = x_spline(t), y_spline(t)
-    print("T:",t)
-    print("Spline x:", spline_x)
-    print("Spline y:", spline_y)
-    print("Current x:", current_x)
-    print("Current y:", current_y)
-    print("Distance:",math.sqrt((spline_x - current_x) ** 2 + (spline_y - current_y) ** 2))
+    # print("T:",t)
+    # print("Spline x:", spline_x)
+    # print("Spline y:", spline_y)
+    # print("Current x:", current_x)
+    # print("Current y:", current_y)
+    # print("Distance:",math.sqrt((spline_x - current_x) ** 2 + (spline_y - current_y) ** 2))
     return math.sqrt((spline_x - current_x) ** 2 + (spline_y - current_y) ** 2)
        
-def closest_spline_param(current_x,current_y):
-    res = minimize(distance_to_spline,x0=0, args=(current_x, current_y))
+def closest_spline_param(current_x,current_y,best_t=0):
+    res = minimize(distance_to_spline,x0=best_t, args=(current_x, current_y))
     return res.x
 
 # tx = 7.802263207037918e-05
@@ -141,7 +149,7 @@ def closest_spline_param(current_x,current_y):
 # print("Spline X:",sp_x)
 # print("Spline Y:",sp_y)
 
-def nonlinear_kinematic_mpc_solver(current_state):
+def nonlinear_kinematic_mpc_solver(current_state,last_t=0):
     opti = casadi.Opti()
     
     x = opti.variable(N_x, N+1)
@@ -158,11 +166,19 @@ def nonlinear_kinematic_mpc_solver(current_state):
 
     ref_t_list = []
 
+    init_t = None
+
     for t in range(N-1):
         cost += u[:, t].T @ R @ u[:, t]
         if t != 0:
             if current_speed is not None:
-                init_t = closest_spline_param(current_state[0],current_state[1])
+                init_t = closest_spline_param(current_state[0],current_state[1],last_t)
+                # print("Current X:",current_state[0])
+                # print("Current Y:",current_state[1])
+                # print("Init T:",init_t)
+                # print("X_spline:",x_spline(init_t))
+                # print("Y_spline:",y_spline(init_t))
+                print("*"*50)
                 desired_speed = v_spline(init_t)
                 ds = current_speed*dt+(1/2)*(desired_speed-current_speed)*dt
                 next_t = (init_t+ds)%track_length
@@ -223,7 +239,7 @@ def nonlinear_kinematic_mpc_solver(current_state):
     acceleration = sol.value(u[0,0])
     steering = sol.value(u[1,0])
 
-    return acceleration, steering,ref_t_list
+    return acceleration, steering,ref_t_list,init_t
 
 
 
@@ -316,6 +332,8 @@ if __name__ == "__main__":
     delta_t = 0
     speed_ref = []
     odoms = []
+
+    last_t_m = 0
     
     while not rospy.is_shutdown():
         try:
@@ -323,7 +341,8 @@ if __name__ == "__main__":
             current_state = vehicle_state.vehicle_state_output()
 
             # Compute Control Output from Nonlinear Model Predictive Control
-            acceleration, steering,refs = nonlinear_kinematic_mpc_solver(current_state)
+            acceleration, steering,refs,t = nonlinear_kinematic_mpc_solver(current_state,last_t_m)
+            last_t_m = t
             
             references = []
             for i in refs:

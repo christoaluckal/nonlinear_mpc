@@ -5,6 +5,7 @@ import math
 import matplotlib.pyplot as plt
 from scipy import signal
 
+
 # Example cubic splines for x and y
 # Replace these with your actual spline functions
 t = np.linspace(0, 2 * np.pi, 100)
@@ -46,9 +47,11 @@ print("Y at closest point:", y_spline(closest_param))
 
 a = 1
 b = 4
-t = np.linspace(0, 3, 500)
+chunk_size = 30
+distance = np.linspace(0,300,300)
 
-y = (b+a)/2 + ((b-a)/2) * signal.sawtooth(np.pi * 4 * t)
+sawtooth_wave = signal.sawtooth(2 * np.pi * (1/chunk_size) * distance, 0.5)
+sawtooth_wave = (b - a) * (sawtooth_wave + 1) / 2 + a
 
-plt.plot(t, y)
+plt.plot(distance, sawtooth_wave, label='sawtooth')
 plt.show()
