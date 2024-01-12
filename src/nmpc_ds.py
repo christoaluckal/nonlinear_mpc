@@ -26,6 +26,9 @@ import matplotlib.pyplot as plt
 from std_srvs.srv import SetBool
 import rosparam
 import rospkg
+from scipy.optimize import minimize_scalar,minimize
+from scipy import signal
+from scipy.interpolate import CubicSpline
 rp = rospkg.RosPack()
 
 global_speed = rosparam.get_param("global_speed")
@@ -56,6 +59,22 @@ time = int(track_length/global_speed)
 
 print("Track Time:",time)
 print("Track Length:",track_length)
+
+csv_f = track_file
+
+global_path,x_spline,y_spline = pathgen.get_spline_path(csv_f,time)
+
+def sawtooth_wave(a,b,t,count):
+    t = np.linspace(0, t,count)
+
+    y = (b+a)/2 + ((b-a)/2) * signal.sawtooth(np.pi * 4 * t)
+    return y
+
+v_profile = sawtooth_wave(1,2,track_length,len(global_path))
+v_profile = np.array(v_profile)
+v_spline = CubicSpline(np.linspace(0,track_length,len(global_path)),v_profile)
+
+s_vec = np.linspace(0,track_length,len(global_path))
 
 class VehicleState:
     def __init__(self):
@@ -92,11 +111,37 @@ class VehicleState:
         vehicle_state = np.array([self.x, self.y, self.yaw, self.vel,self.x_vel,self.y_vel])
         return vehicle_state
     
-def ref_ddist(idx,refs,dist=0.3):
-    next = idx+1
-    pass
+def euclidean_dist(p1,p2):
+    return math.sqrt((p1[0]-p2[0])**2+(p1[1]-p2[1])**2)
 
-def nonlinear_kinematic_mpc_solver(current_state,references):
+def distance_to_spline(t,current_x,current_y):
+    spline_x, spline_y = x_spline(t), y_spline(t)
+    print("T:",t)
+    print("Spline x:", spline_x)
+    print("Spline y:", spline_y)
+    print("Current x:", current_x)
+    print("Current y:", current_y)
+    print("Distance:",math.sqrt((spline_x - current_x) ** 2 + (spline_y - current_y) ** 2))
+    return math.sqrt((spline_x - current_x) ** 2 + (spline_y - current_y) ** 2)
+       
+def closest_spline_param(current_x,current_y):
+    res = minimize(distance_to_spline,x0=0, args=(current_x, current_y))
+    return res.x
+
+# tx = 7.802263207037918e-05
+# ty = -3.3143750975931824e-06
+
+# closest_t = closest_spline_param(tx,ty)
+# sp_x = x_spline(closest_t)
+# sp_y = y_spline(closest_t)
+
+# print("Tx:",tx)
+# print("Ty:",ty)
+# print("Closest T:",closest_t)
+# print("Spline X:",sp_x)
+# print("Spline Y:",sp_y)
+
+def nonlinear_kinematic_mpc_solver(current_state):
     opti = casadi.Opti()
     
     x = opti.variable(N_x, N+1)
@@ -105,22 +150,54 @@ def nonlinear_kinematic_mpc_solver(current_state,references):
     x_0 = [0,0,0,current_state[3]]
     x_0 = casadi.MX(x_0)
 
-    x_ref_base = np.zeros((N_x,N))
-    closest_idx = closest_point(current_state,references)
-    closest_idx+=1
-    current_v = current_state[3]
-    desired_v = references[closest_idx][3]
-    a0 = (desired_v-current_v)/dt
-    
-
     Q = casadi.diag([qx, qy, q_yaw, q_vel])
     R = casadi.diag([r_acc, r_steer])
     cost = 0
 
+    current_speed = current_state[3]
+
+    ref_t_list = []
+
     for t in range(N-1):
         cost += u[:, t].T @ R @ u[:, t]
         if t != 0:
-            cost += (x_ref[:, t].T - x[:, t].T) @ Q @ (x_ref[:, t] - x[:, t])
+            if current_speed is not None:
+                init_t = closest_spline_param(current_state[0],current_state[1])
+                desired_speed = v_spline(init_t)
+                ds = current_speed*dt+(1/2)*(desired_speed-current_speed)*dt
+                next_t = (init_t+ds)%track_length
+                next_x = x_spline(next_t)
+                next_y = y_spline(next_t)
+                next_yaw = np.arctan2(y_spline(next_t,1),x_spline(next_t,1))
+                next_vel = v_spline(next_t)
+
+                local_frame = vehicle_coordinate_transformation([next_x,next_y,next_yaw,next_vel],current_state)
+                local_frame = local_frame[1]
+
+                x_ref = casadi.MX([local_frame[0],local_frame[1],local_frame[2],local_frame[3]])
+                cost += (x_ref.T - x[:, t].T) @ Q @ (x_ref - x[:, t])
+
+                current_speed = None
+
+                ref_t_list.append(next_t)
+            else:
+                curr_t = next_t
+                ds = v_spline(curr_t)
+                next_t = (curr_t+ds)%track_length
+                next_x = x_spline(next_t)
+                next_y = y_spline(next_t)
+                next_yaw = np.arctan2(y_spline(next_t,1),x_spline(next_t,1))
+                next_vel = v_spline(next_t)
+
+                local_frame = vehicle_coordinate_transformation([next_x,next_y,next_yaw,next_vel],current_state)
+                local_frame = local_frame[1]
+
+                x_ref = casadi.MX([local_frame[0],local_frame[1],local_frame[2],local_frame[3]])
+                cost += (x_ref.T - x[:, t].T) @ Q @ (x_ref - x[:, t])
+
+                ref_t_list.append(next_t)
+                
+
         opti.subject_to(x[0, t + 1] == x[0, t] + x[3, t]*casadi.cos(x[2, t])*dt)
         opti.subject_to(x[1, t + 1] == x[1, t] + x[3, t]*casadi.sin(x[2, t])*dt)
         opti.subject_to(x[2, t + 1] == x[2, t] + x[3, t]*casadi.tan(u[1, t])*dt/WB)
@@ -146,7 +223,7 @@ def nonlinear_kinematic_mpc_solver(current_state,references):
     acceleration = sol.value(u[0,0])
     steering = sol.value(u[1,0])
 
-    return acceleration, steering
+    return acceleration, steering,ref_t_list
 
 
 
@@ -227,9 +304,7 @@ if __name__ == "__main__":
     raceline_pub = rospy.Publisher('visualization_markers',Marker,queue_size=1)
     spline_marker_pub = rospy.Publisher('visualization_markers',Marker,queue_size=1)
 
-    csv_f = track_file
-
-    global_path,x_spline,y_spline = pathgen.get_spline_path(csv_f,time)
+    
 
     rate = rospy.Rate(rosparam.get_param("rate"))
     vehicle_state = VehicleState()
@@ -248,19 +323,27 @@ if __name__ == "__main__":
             current_state = vehicle_state.vehicle_state_output()
 
             # Compute Control Output from Nonlinear Model Predictive Control
-            acceleration, steering = nonlinear_kinematic_mpc_solver(current_state)
+            acceleration, steering,refs = nonlinear_kinematic_mpc_solver(current_state)
             
-            print(acceleration,steering)
+            references = []
+            for i in refs:
+                references.append([x_spline(i),y_spline(i)])
+            
 
+            # print("Acceleration:",acceleration)
+            # print("Steering:",steering)
+            # print("References:",references)
+            
+            drive_msg = AckermannDrive()
+            drive_msg.speed = current_state[3] + acceleration*dt
+            drive_msg.steering_angle = steering
+            drive_pub.publish(drive_msg)
 
 
             raceline_pub.publish(rviz_markers(global_path,0))
-            spline_marker_pub.publish(rviz_markers(reference_pose,1))
+            spline_marker_pub.publish(rviz_markers(references,1))
             rate.sleep()
-        except IndexError:
-            continue
-        except RuntimeError:
-            continue
+        
         except rospy.exceptions.ROSInterruptException:
             break
     
