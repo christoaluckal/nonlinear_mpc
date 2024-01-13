@@ -41,7 +41,7 @@ max_steer = rosparam.get_param("max_steer")
 max_acc = rosparam.get_param("max_acc")
 
 track_file = os.path.join(rp.get_path('nonlinear_mpc'),rosparam.get_param("track_file"))
-track_length = pathgen.get_track_length(track_file)
+
 qx = rosparam.get_param("Q")[0]
 qy = rosparam.get_param("Q")[1]
 q_yaw = rosparam.get_param("Q")[2]
@@ -50,19 +50,14 @@ r_acc = rosparam.get_param("R")[0]
 r_steer = rosparam.get_param("R")[1]
 u_acc = rosparam.get_param("U")[0]
 u_steer = rosparam.get_param("U")[1]
+is_raceline = rosparam.get_param("is_raceline")
 
 N_x = 4
 N_u = 2
 
 dt = future_time/N
-time = int(track_length/global_speed)
 
-print("Track Time:",time)
-print("Track Length:",track_length)
 
-csv_f = track_file
-
-global_path,x_spline,y_spline = pathgen.get_spline_path(csv_f,time)
 
 def sawtooth_wave(a,b,t,count):
     t = np.linspace(0, t,count)
@@ -73,16 +68,26 @@ def sawtooth_wave(a,b,t,count):
     return sawtooth_wave
 
 
+if not is_raceline:
+    csv_f = track_file
+    global_path,track_length,x_spline,y_spline,_ = pathgen.get_spline_path(csv_f)
+    v_profile = sawtooth_wave(2,10,track_length,len(global_path))
+    v_profile = np.array(v_profile)
+    v_spline = CubicSpline(np.linspace(0,track_length,len(global_path)),v_profile)
+    s_vec = np.linspace(0,track_length,len(global_path))
+    plt.plot(s_vec,v_profile)
+    plt.show()
+else:
+    csv_f = track_file
+    x_idx = 6
+    y_idx = 7
+    v_idx = 8
+    global_path,track_length,x_spline,y_spline,v_spline = pathgen.get_spline_path(csv_f,x_idx,y_idx,v_idx)
+    s_vec = np.linspace(0,track_length,len(global_path))
+    plt.plot(s_vec,v_spline(s_vec))
+    plt.show()
+    
 
-v_profile = sawtooth_wave(5,5,track_length,len(global_path))
-
-v_profile = np.array(v_profile)
-v_spline = CubicSpline(np.linspace(0,track_length,len(global_path)),v_profile)
-
-s_vec = np.linspace(0,track_length,len(global_path))
-
-plt.plot(s_vec,v_profile)
-plt.show()
 
 class VehicleState:
     def __init__(self):
@@ -124,30 +129,12 @@ def euclidean_dist(p1,p2):
 
 def distance_to_spline(t,current_x,current_y):
     spline_x, spline_y = x_spline(t), y_spline(t)
-    # print("T:",t)
-    # print("Spline x:", spline_x)
-    # print("Spline y:", spline_y)
-    # print("Current x:", current_x)
-    # print("Current y:", current_y)
-    # print("Distance:",math.sqrt((spline_x - current_x) ** 2 + (spline_y - current_y) ** 2))
     return math.sqrt((spline_x - current_x) ** 2 + (spline_y - current_y) ** 2)
        
 def closest_spline_param(current_x,current_y,best_t=0):
     res = minimize(distance_to_spline,x0=best_t, args=(current_x, current_y))
     return res.x
 
-# tx = 7.802263207037918e-05
-# ty = -3.3143750975931824e-06
-
-# closest_t = closest_spline_param(tx,ty)
-# sp_x = x_spline(closest_t)
-# sp_y = y_spline(closest_t)
-
-# print("Tx:",tx)
-# print("Ty:",ty)
-# print("Closest T:",closest_t)
-# print("Spline X:",sp_x)
-# print("Spline Y:",sp_y)
 
 def nonlinear_kinematic_mpc_solver(current_state,last_t=0):
     opti = casadi.Opti()
@@ -173,12 +160,6 @@ def nonlinear_kinematic_mpc_solver(current_state,last_t=0):
         if t != 0:
             if current_speed is not None:
                 init_t = closest_spline_param(current_state[0],current_state[1],last_t)
-                # print("Current X:",current_state[0])
-                # print("Current Y:",current_state[1])
-                # print("Init T:",init_t)
-                # print("X_spline:",x_spline(init_t))
-                # print("Y_spline:",y_spline(init_t))
-                print("*"*50)
                 desired_speed = v_spline(init_t)
                 ds = current_speed*dt+(1/2)*(desired_speed-current_speed)*dt
                 next_t = (init_t+ds)%track_length
@@ -198,7 +179,7 @@ def nonlinear_kinematic_mpc_solver(current_state,last_t=0):
                 ref_t_list.append(next_t)
             else:
                 curr_t = next_t
-                ds = v_spline(curr_t)
+                ds = v_spline(curr_t)*dt
                 next_t = (curr_t+ds)%track_length
                 next_x = x_spline(next_t)
                 next_y = y_spline(next_t)
@@ -284,35 +265,6 @@ def rviz_markers(pose,idx):
     return points
 
 
-def reference_pose_selection(x_spline,y_spline, curr_t,N):
-    delta_t = future_time
-
-    t_vec = np.linspace(curr_t,curr_t+delta_t,N)
-    if curr_t+delta_t > time:
-        t_vec = t_vec%time
-    xTraj = x_spline(t_vec)
-    yTraj = y_spline(t_vec)
-
-    xdTraj = x_spline(t_vec,1)
-    ydTraj = y_spline(t_vec, 1)
-
-    thTraj = np.arctan2(ydTraj,xdTraj)
-    
-    vTraj = np.sqrt(np.power(xdTraj,2)+ np.power(ydTraj,2))
-    path_array = np.array([xTraj,yTraj,thTraj,vTraj]).T
-
-    return path_array
-
-def closest_point(curr_pose,refs):
-    ref_vals =refs[:,0:2]
-    curr_xy = curr_pose[0:2]
-    distances = np.zeros((ref_vals.shape))
-
-    for i in range(len(ref_vals)):
-        distances[i] = math.sqrt((ref_vals[i][0]-curr_xy[0])**2+(ref_vals[i][1]-curr_xy[1])**2)
-
-    return np.argmin(distances)
-
 if __name__ == "__main__":
     rospy.init_node("nmpc_node",anonymous=True)
     rospy.loginfo("Start NMPC")
@@ -330,8 +282,9 @@ if __name__ == "__main__":
 
     init_time = rospy.get_time()
     delta_t = 0
-    speed_ref = []
-    odoms = []
+    
+    speeds = []
+    desired_speeds = []
 
     last_t_m = 0
     
@@ -347,14 +300,16 @@ if __name__ == "__main__":
             references = []
             for i in refs:
                 references.append([x_spline(i),y_spline(i)])
-            
 
             # print("Acceleration:",acceleration)
             # print("Steering:",steering)
             # print("References:",references)
+                
+            speeds.append(current_state[3])
+            desired_speeds.append(v_spline(t))
             
             drive_msg = AckermannDrive()
-            drive_msg.speed = current_state[3] + acceleration*dt
+            drive_msg.speed = current_state[3]+acceleration*dt
             drive_msg.steering_angle = steering
             drive_pub.publish(drive_msg)
 
@@ -365,4 +320,10 @@ if __name__ == "__main__":
         
         except rospy.exceptions.ROSInterruptException:
             break
+
+
+plt.plot(speeds,label="Actual Speed")
+plt.plot(desired_speeds,label="Desired Speed")
+plt.legend()
+plt.show()
     
