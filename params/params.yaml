@@ -1,13 +1,13 @@
-global_speed: 0.5
+global_speed: 5
 N: 5
-future_time: 0.5
+future_time: 3
 WB: 0.324
-vel_max: 3
+vel_max: 10
 vel_min: 0.1
 max_steer: 0.4189
 max_acc: 3
 track_file: "tracks/IMS_centerline.csv"
-Q: [5,5,0.1,0.1]
+Q: [5,5,5,5]
 R: [0.1,0.1]
 U: [0.1,0.1]
 drive_topic: "/car_1/command"

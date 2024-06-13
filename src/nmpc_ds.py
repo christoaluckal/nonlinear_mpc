@@ -310,7 +310,7 @@ if __name__ == "__main__":
             
             drive_msg = AckermannDrive()
             drive_msg.speed = current_state[3]+acceleration*dt
-            drive_msg.steering_angle = steering
+            drive_msg.steering_angle = -steering
             drive_pub.publish(drive_msg)
 
 
