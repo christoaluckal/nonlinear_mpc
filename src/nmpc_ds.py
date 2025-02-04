@@ -7,41 +7,40 @@ Instiution: Clemson University Mechanical Engineering
 '''
 
 import rospy
-from nav_msgs.msg import Path, Odometry
+from nav_msgs.msg import Odometry
 from ackermann_msgs.msg import AckermannDrive
-from geometry_msgs.msg import PoseStamped, PoseArray, Pose,Point
+from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker
 import math
-from utils import yaw_change_correction, vehicle_coordinate_transformation
+from utils import vehicle_coordinate_transformation
 import numpy as np
-from numpy import linalg as LA
-from tf.transformations import euler_from_quaternion, quaternion_from_euler
+from tf.transformations import euler_from_quaternion
 import casadi
 from timeit import default_timer as timer
-import csv
 import os
 import pathgen_ds as pathgen
-import sys
 import matplotlib.pyplot as plt
-from std_srvs.srv import SetBool
 import rosparam
 import rospkg
-from scipy.optimize import minimize_scalar,minimize
+from scipy.optimize import minimize
 from scipy import signal
 from scipy.interpolate import CubicSpline
 rp = rospkg.RosPack()
 
-global_speed = rosparam.get_param("global_speed")
-N = rosparam.get_param("N")
-future_time = rosparam.get_param("future_time")
-WB = rosparam.get_param("WB")
+# Optimizer variables
+global_speed = rosparam.get_param("global_speed") # Avg. speed
+N = rosparam.get_param("N") # Number of references, actual references is N-2
+future_time = rosparam.get_param("future_time") # Lookahead time
+WB = rosparam.get_param("WB") # Wheelbase
 vel_max = rosparam.get_param("vel_max")
 vel_min = rosparam.get_param("vel_min")
 max_steer = rosparam.get_param("max_steer")
 max_acc = rosparam.get_param("max_acc")
 
+# Track file
 track_file = os.path.join(rp.get_path('nonlinear_mpc'),rosparam.get_param("track_file"))
 
+# State and Control costs
 qx = rosparam.get_param("Q")[0]
 qy = rosparam.get_param("Q")[1]
 q_yaw = rosparam.get_param("Q")[2]
@@ -50,15 +49,19 @@ r_acc = rosparam.get_param("R")[0]
 r_steer = rosparam.get_param("R")[1]
 u_acc = rosparam.get_param("U")[0]
 u_steer = rosparam.get_param("U")[1]
+
+# Does the csv contain a raceline (velocity profile)
 is_raceline = rosparam.get_param("is_raceline")
 
+# State and control dimensions
 N_x = 4
 N_u = 2
 
+# Delta-time
 dt = future_time/N
 
 
-
+# Function to generate a fake variable speed. Testing purposes only
 def sawtooth_wave(a,b,t,count):
     t = np.linspace(0, t,count)
     chunk_size = 30
@@ -67,7 +70,7 @@ def sawtooth_wave(a,b,t,count):
     sawtooth_wave = (b - a) * (sawtooth_wave + 1) / 2 + a
     return sawtooth_wave
 
-
+# Raceline means the csv contains optimal velocities to consider
 if not is_raceline:
     csv_f = track_file
     global_path,track_length,x_spline,y_spline,_ = pathgen.get_spline_path(csv_f)
@@ -82,6 +85,7 @@ else:
     x_idx = 6
     y_idx = 7
     v_idx = 8
+    # Non-default idxs will get the velocity profile
     global_path,track_length,x_spline,y_spline,v_spline = pathgen.get_spline_path(csv_f,x_idx,y_idx,v_idx)
     s_vec = np.linspace(0,track_length,len(global_path))
     plt.plot(s_vec,v_spline(s_vec))
@@ -130,7 +134,8 @@ def euclidean_dist(p1,p2):
 def distance_to_spline(t,current_x,current_y):
     spline_x, spline_y = x_spline(t), y_spline(t)
     return math.sqrt((spline_x - current_x) ** 2 + (spline_y - current_y) ** 2)
-       
+
+# Scipy optimize to find the t:[0,track_length] value since the spline is generated as a function of distance
 def closest_spline_param(current_x,current_y,best_t=0):
     res = minimize(distance_to_spline,x0=best_t, args=(current_x, current_y))
     return res.x
@@ -159,10 +164,10 @@ def nonlinear_kinematic_mpc_solver(current_state,last_t=0):
         cost += u[:, t].T @ R @ u[:, t]
         if t != 0:
             if current_speed is not None:
-                init_t = closest_spline_param(current_state[0],current_state[1],last_t)
-                desired_speed = v_spline(init_t)
-                ds = current_speed*dt+(1/2)*(desired_speed-current_speed)*dt
-                next_t = (init_t+ds)%track_length
+                init_t = closest_spline_param(current_state[0],current_state[1],last_t) # Get the closest spline variable
+                desired_speed = v_spline(init_t) # Get the desired speed from the velocity profile
+                ds = current_speed*dt+(1/2)*(desired_speed-current_speed)*dt # Compute the distance to the next spline point if the car instantly accelerates to the desired velocity
+                next_t = (init_t+ds)%track_length # If the car accelerates then the next spline variable is this
                 next_x = x_spline(next_t)
                 next_y = y_spline(next_t)
                 next_yaw = np.arctan2(y_spline(next_t,1),x_spline(next_t,1))
@@ -179,7 +184,7 @@ def nonlinear_kinematic_mpc_solver(current_state,last_t=0):
                 ref_t_list.append(next_t)
             else:
                 curr_t = next_t
-                ds = v_spline(curr_t)*dt
+                ds = v_spline(curr_t)*dt # Same as above but the ds is just v = ds/dt
                 next_t = (curr_t+ds)%track_length
                 next_x = x_spline(next_t)
                 next_y = y_spline(next_t)
